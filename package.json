@@ -1,6 +1,6 @@
 {
   "name": "field-recording-mirror",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "private": false,
   "description": "A private browser instrument that records 30 seconds of now and replays it as a subtly altered sonic mirror.",
   "license": "MIT",

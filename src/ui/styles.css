@@ -35,12 +35,33 @@ body {
 }
 
 .chrome {
-  display: flex;
-  flex-direction: column;
-  gap: 0.25rem;
+  display: grid;
+  grid-template-columns: 1fr auto;
+  align-items: end;
+  gap: 0.25rem 1rem;
   padding: max(env(safe-area-inset-top), var(--pad)) var(--pad) var(--pad);
   border-bottom: 1px solid rgba(158, 236, 255, 0.08);
   background: linear-gradient(180deg, #0d1226 0%, #0b0e1a 100%);
+}
+
+.chrome .brand,
+.chrome .strap {
+  grid-column: 1;
+}
+
+.install {
+  grid-column: 2;
+  grid-row: 1 / span 2;
+  align-self: center;
+  background: transparent;
+  color: var(--accent);
+  border: 1px solid rgba(158, 236, 255, 0.4);
+  padding: 0.45rem 0.85rem;
+  font-size: 0.85rem;
+}
+
+.install:hover {
+  background: rgba(158, 236, 255, 0.1);
 }
 
 .brand {
@@ -103,6 +124,52 @@ body {
 
 .consent input {
   margin-top: 0.2rem;
+}
+
+.row-group {
+  border: 1px solid rgba(158, 236, 255, 0.12);
+  border-radius: 0.55rem;
+  padding: 0.55rem 0.75rem;
+  margin: 0;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem 1rem;
+  align-items: center;
+}
+
+.row-group legend {
+  padding: 0 0.25rem;
+  color: var(--muted);
+  font-size: 0.85rem;
+}
+
+.row-group label {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.4rem;
+  font-size: 0.9rem;
+}
+
+.row-group input[type='radio'] {
+  accent-color: var(--accent);
+}
+
+.toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.4rem;
+  font-size: 0.85rem;
+  color: var(--muted);
+}
+
+.toggle input[type='checkbox'] {
+  accent-color: var(--accent);
+}
+
+button.ghost.active {
+  background: var(--accent-2);
+  color: #0b0e1a;
+  border-color: var(--accent-2);
 }
 
 .muted {

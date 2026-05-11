@@ -7,7 +7,14 @@ import { join } from 'node:path';
 const docsDir = new URL('../docs/', import.meta.url);
 const docsPath = docsDir.pathname;
 
-const removableFiles = ['index.html', '404.html', 'version.json', 'icon.svg'];
+const removableFiles = [
+  'index.html',
+  '404.html',
+  'version.json',
+  'icon.svg',
+  'coi-serviceworker.js',
+  'manifest.webmanifest',
+];
 
 for (const file of removableFiles) {
   const target = join(docsPath, file);

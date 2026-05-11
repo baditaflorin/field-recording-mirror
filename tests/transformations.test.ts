@@ -5,6 +5,7 @@ import {
   semitonesToRatio,
   captureSampleCount,
   rms,
+  type MirrorSettings,
 } from '../src/audio/transformations.js';
 
 describe('clampSettings', () => {
@@ -18,17 +19,50 @@ describe('clampSettings', () => {
       reverbWet: -0.5,
       reverbDecay: 50,
       reverbGain: 5,
+      freezeGrainSize: 10,
+      freezeSemitones: -99,
+      freezeGain: 2,
+      captureMode: 'rolling',
+      channels: 2,
+      spectrogram: true,
     });
-    expect(out).toEqual({
-      liveGain: 1,
-      slowRate: 0.5,
-      slowGain: 0,
-      pitchSemitones: 12,
-      pitchGain: 1,
-      reverbWet: 0,
-      reverbDecay: 8,
-      reverbGain: 1,
+    expect(out.liveGain).toBe(1);
+    expect(out.slowRate).toBe(0.5);
+    expect(out.slowGain).toBe(0);
+    expect(out.pitchSemitones).toBe(12);
+    expect(out.pitchGain).toBe(1);
+    expect(out.reverbWet).toBe(0);
+    expect(out.reverbDecay).toBe(8);
+    expect(out.reverbGain).toBe(1);
+    expect(out.freezeGrainSize).toBe(2);
+    expect(out.freezeSemitones).toBe(-12);
+    expect(out.freezeGain).toBe(1);
+  });
+
+  it('normalises captureMode to a valid literal', () => {
+    const out = clampSettings({
+      ...DEFAULT_MIRROR_SETTINGS,
+      captureMode: 'weird' as unknown as MirrorSettings['captureMode'],
     });
+    expect(out.captureMode).toBe('rolling');
+    expect(clampSettings({ ...DEFAULT_MIRROR_SETTINGS, captureMode: 'locked' }).captureMode).toBe(
+      'locked'
+    );
+  });
+
+  it('normalises channels to 1 or 2', () => {
+    expect(
+      clampSettings({
+        ...DEFAULT_MIRROR_SETTINGS,
+        channels: 4 as unknown as MirrorSettings['channels'],
+      }).channels
+    ).toBe(2);
+    expect(
+      clampSettings({
+        ...DEFAULT_MIRROR_SETTINGS,
+        channels: 1,
+      }).channels
+    ).toBe(1);
   });
 
   it('round-trips defaults', () => {

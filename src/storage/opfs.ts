@@ -1,12 +1,15 @@
-// OPFS (Origin Private File System) helpers. Used to persist:
-//   - last-recording.f32   raw Float32Array of the most recent snapshot
-//   - last-recording.meta  { sampleRate, capturedAt, durationSeconds }
+// OPFS (Origin Private File System) helpers. Persists:
+//   - last-recording.f32   stereo interleaved Float32, [L, R, L, R, ...]
+//   - last-recording.meta  { sampleRate, channels, capturedAt, durationSeconds }
 //
 // Model weights for Whisper / Pyodide are cached by their own libraries; we
 // don't manage those here.
 
+import type { StereoSnapshot } from '../audio/shared-capture.js';
+
 export interface RecordingMeta {
   sampleRate: number;
+  channels: number;
   capturedAt: string;
   durationSeconds: number;
 }
@@ -21,16 +24,20 @@ async function rootDir(): Promise<FileSystemDirectoryHandle> {
   return navigator.storage.getDirectory();
 }
 
-export async function saveRecording(samples: Float32Array, meta: RecordingMeta): Promise<void> {
+export async function saveRecording(snapshot: StereoSnapshot, meta: RecordingMeta): Promise<void> {
   const root = await rootDir();
   const audioHandle = await root.getFileHandle(AUDIO_FILE, { create: true });
   const audioWriter = await audioHandle.createWritable();
-  // Normalise to a plain ArrayBuffer — snapshots that originated in a
-  // SharedArrayBuffer ring widen the typed-array generic and the OPFS
-  // writable stream's signature only accepts ArrayBuffer.
-  const buffer = new ArrayBuffer(samples.byteLength);
-  new Float32Array(buffer).set(samples);
-  await audioWriter.write(buffer);
+  const frames = snapshot.left.length;
+  // Interleave L/R into a fresh ArrayBuffer so the OPFS writable accepts it
+  // even when the source originated in a SharedArrayBuffer ring.
+  const interleaved = new ArrayBuffer(frames * 2 * Float32Array.BYTES_PER_ELEMENT);
+  const view = new Float32Array(interleaved);
+  for (let i = 0; i < frames; i++) {
+    view[i * 2] = snapshot.left[i] ?? 0;
+    view[i * 2 + 1] = snapshot.right[i] ?? 0;
+  }
+  await audioWriter.write(interleaved);
   await audioWriter.close();
 
   const metaHandle = await root.getFileHandle(META_FILE, { create: true });
@@ -40,7 +47,7 @@ export async function saveRecording(samples: Float32Array, meta: RecordingMeta):
 }
 
 export interface LoadedRecording {
-  samples: Float32Array;
+  snapshot: StereoSnapshot;
   meta: RecordingMeta;
 }
 
@@ -56,9 +63,16 @@ export async function loadRecording(): Promise<LoadedRecording | null> {
   }
   const audioFile = await audioHandle.getFile();
   const metaFile = await metaHandle.getFile();
-  const samples = new Float32Array(await audioFile.arrayBuffer());
   const meta = JSON.parse(await metaFile.text()) as RecordingMeta;
-  return { samples, meta };
+  const interleaved = new Float32Array(await audioFile.arrayBuffer());
+  const frames = interleaved.length / 2;
+  const left = new Float32Array(frames);
+  const right = new Float32Array(frames);
+  for (let i = 0; i < frames; i++) {
+    left[i] = interleaved[i * 2] ?? 0;
+    right[i] = interleaved[i * 2 + 1] ?? 0;
+  }
+  return { snapshot: { left, right }, meta };
 }
 
 export async function clearRecording(): Promise<void> {

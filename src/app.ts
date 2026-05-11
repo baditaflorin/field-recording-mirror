@@ -1,8 +1,9 @@
-// Controller: wires the audio engine to the DOM view and the lazy WASM
-// workers. The view itself has no behaviour; this module owns it.
+// Controller: wires the audio engine to the DOM view, the lazy WASM workers,
+// the spectrogram, and the install prompt.
 
 import { createEngine, type Engine, CAPTURE_SECONDS } from './audio/engine.js';
-import { clampSettings, type MirrorSettings } from './audio/transformations.js';
+import { clampSettings, type MirrorSettings, type CaptureMode } from './audio/transformations.js';
+import type { StereoSnapshot } from './audio/shared-capture.js';
 import { saveRecording, clearRecording, type RecordingMeta } from './storage/opfs.js';
 import { loadSettings, saveSettings } from './storage/settings.js';
 import { createVisualizer, type Visualizer } from './ui/visualizer.js';
@@ -15,9 +16,30 @@ declare const __APP_VERSION__: string;
 declare const __GIT_COMMIT__: string;
 declare const __BUILT_AT__: string;
 
+interface InstallPromptEvent extends Event {
+  prompt: () => Promise<void>;
+  userChoice: Promise<{ outcome: 'accepted' | 'dismissed' }>;
+}
+
 export interface App {
   start(): void;
 }
+
+const SLIDER_KEYS = [
+  'liveGain',
+  'slowRate',
+  'slowGain',
+  'pitchSemitones',
+  'pitchGain',
+  'reverbDecay',
+  'reverbWet',
+  'reverbGain',
+  'freezeGrainSize',
+  'freezeSemitones',
+  'freezeGain',
+] as const satisfies readonly (keyof MirrorSettings)[];
+
+type SliderKey = (typeof SLIDER_KEYS)[number];
 
 export function bootstrap(): App {
   const maybeHost = document.getElementById('app');
@@ -29,8 +51,11 @@ export function bootstrap(): App {
 
   const persisted = loadSettings();
   let settings: MirrorSettings = persisted.mirror;
+
   refs.consent.checked = persisted.consented;
   refs.start.disabled = !persisted.consented;
+  reflectModeAndChannels(refs, settings);
+  refs.spectrogramToggle.checked = settings.spectrogram;
 
   bindSlidersToSettings(refs, settings, (next) => {
     settings = next;
@@ -41,31 +66,48 @@ export function bootstrap(): App {
   refs.consent.addEventListener('change', () => {
     refs.start.disabled = !refs.consent.checked;
     saveSettings({ mirror: settings, consented: refs.consent.checked });
+    if (!refs.consent.checked) void clearRecording();
+  });
+
+  refs.captureModeRolling.addEventListener('change', () => updateModeFromUI());
+  refs.captureModeLocked.addEventListener('change', () => updateModeFromUI());
+  refs.channelsMono.addEventListener('change', () => updateChannelsFromUI());
+  refs.channelsStereo.addEventListener('change', () => updateChannelsFromUI());
+  refs.spectrogramToggle.addEventListener('change', () => {
+    settings = clampSettings({ ...settings, spectrogram: refs.spectrogramToggle.checked });
+    visualizer?.setSpectrogramEnabled(settings.spectrogram);
+    saveSettings({ mirror: settings, consented: refs.consent.checked });
   });
 
   const engine: Engine = createEngine({
     onElapsed: (seconds) => {
       const capped = Math.min(seconds, CAPTURE_SECONDS);
       refs.elapsed.textContent = `${formatDuration(capped)} / ${formatDuration(CAPTURE_SECONDS)}`;
-      if (seconds >= CAPTURE_SECONDS) {
-        refs.mirrorButton.disabled = false;
-        refs.transcribeButton.disabled = false;
-        refs.analyseButton.disabled = false;
-        if (!engine.isMirroring()) {
-          refs.status.textContent = 'ring is full — press Begin mirror';
-        }
-      } else {
-        refs.mirrorButton.disabled = true;
+      const ready = seconds >= CAPTURE_SECONDS || engine.isLocked();
+      refs.mirrorButton.disabled = !ready;
+      refs.transcribeButton.disabled = !ready;
+      refs.analyseButton.disabled = !ready;
+      if (ready && !engine.isMirroring()) {
+        refs.status.textContent = engine.isLocked()
+          ? 'moment locked — press Begin mirror'
+          : 'ring is full — press Begin mirror';
       }
     },
-    onLevel: (level) => {
-      const pct = Math.min(100, Math.round(level * 240));
+    onLevel: (peak) => {
+      const pct = Math.min(100, Math.round(peak * 120));
       refs.meterFill.style.width = `${pct.toString()}%`;
     },
     onMirrorStateChange: (mirroring) => {
       refs.mirrorButton.textContent = mirroring ? 'Refresh mirror' : 'Begin mirror';
-      refs.status.textContent = mirroring ? 'mirror running — slowed, pitched, reverbed' : 'ready';
+      refs.status.textContent = mirroring
+        ? 'mirror running — slow, pitch, reverb, freeze'
+        : 'ready';
     },
+    onLockStateChange: (locked) => {
+      refs.lockButton.textContent = locked ? 'Release lock' : 'Lock moment';
+      refs.lockButton.classList.toggle('active', locked);
+    },
+    onSpectrogramColumn: (column) => visualizer?.pushSpectrogramColumn(column),
     onError: (e) => {
       refs.status.textContent = `error: ${e.message}`;
     },
@@ -86,6 +128,11 @@ export function bootstrap(): App {
     void persistSnapshot();
   });
 
+  refs.lockButton.addEventListener('click', () => {
+    if (engine.isLocked()) engine.releaseLock();
+    else engine.lockBuffer();
+  });
+
   refs.stopButton.addEventListener('click', () => {
     void stop();
   });
@@ -98,22 +145,60 @@ export function bootstrap(): App {
     void runAnalyse();
   });
 
+  // PWA install affordance.
+  let deferredInstall: InstallPromptEvent | null = null;
+  window.addEventListener('beforeinstallprompt', (e) => {
+    e.preventDefault();
+    deferredInstall = e as InstallPromptEvent;
+    refs.installButton.hidden = false;
+  });
+  refs.installButton.addEventListener('click', () => {
+    const prompt = deferredInstall;
+    if (!prompt) return;
+    void prompt.prompt().then(async () => {
+      const choice = await prompt.userChoice;
+      if (choice.outcome === 'accepted') refs.installButton.hidden = true;
+      deferredInstall = null;
+    });
+  });
+  window.addEventListener('appinstalled', () => {
+    refs.installButton.hidden = true;
+  });
+
+  function updateModeFromUI(): void {
+    const mode: CaptureMode = refs.captureModeLocked.checked ? 'locked' : 'rolling';
+    settings = clampSettings({ ...settings, captureMode: mode });
+    saveSettings({ mirror: settings, consented: refs.consent.checked });
+    // If switching to rolling while locked, release the lock so the mirror
+    // tracks again.
+    if (mode === 'rolling' && engine.isLocked()) engine.releaseLock();
+  }
+
+  function updateChannelsFromUI(): void {
+    const channels: 1 | 2 = refs.channelsMono.checked ? 1 : 2;
+    settings = clampSettings({ ...settings, channels });
+    saveSettings({ mirror: settings, consented: refs.consent.checked });
+    if (engine.isRunning()) {
+      refs.status.textContent = 'channel change applies after Stop + Listen';
+    }
+  }
+
   async function start(): Promise<void> {
     if (engine.isRunning()) return;
     refs.start.disabled = true;
     refs.status.textContent = 'requesting microphone…';
     try {
-      await engine.start();
+      await engine.start(settings);
     } catch (e) {
       refs.start.disabled = false;
       refs.status.textContent = `mic blocked: ${e instanceof Error ? e.message : String(e)}`;
       return;
     }
     refs.permissionGate.hidden = true;
-    const live = host.querySelector<HTMLElement>('[data-role="live"]');
-    if (live) live.hidden = false;
+    refs.live.hidden = false;
 
     visualizer = createVisualizer(refs.canvas);
+    visualizer.setSpectrogramEnabled(settings.spectrogram);
     visualizer.resize();
     window.addEventListener('resize', handleResize);
 
@@ -121,10 +206,12 @@ export function bootstrap(): App {
     refs.status.textContent = `filling ring buffer — ${CAPTURE_SECONDS}s`;
 
     const renderLoop = (): void => {
-      const snap = engine.snapshot();
-      if (snap && visualizer) {
-        const tail = snap.length > 4096 ? snap.subarray(snap.length - 4096) : snap;
-        visualizer.render(tail, engine.isMirroring() ? snap : null);
+      if (visualizer) {
+        const ring = engine.ringSnapshot();
+        const live = ring ? tailOf(ring, 4096) : null;
+        const visible = engine.visibleSnapshot();
+        const mirror = engine.isMirroring() || engine.isLocked() ? visible : null;
+        visualizer.render(live, mirror);
       }
       renderHandle = window.requestAnimationFrame(renderLoop);
     };
@@ -143,8 +230,7 @@ export function bootstrap(): App {
     }
     await engine.stop();
     refs.permissionGate.hidden = false;
-    const live = host.querySelector<HTMLElement>('[data-role="live"]');
-    if (live) live.hidden = true;
+    refs.live.hidden = true;
     refs.start.disabled = !refs.consent.checked;
     refs.mirrorButton.disabled = true;
     refs.transcribeButton.disabled = true;
@@ -153,23 +239,24 @@ export function bootstrap(): App {
   }
 
   async function persistSnapshot(): Promise<void> {
-    const samples = engine.snapshot();
-    if (!samples || samples.length === 0) return;
+    const snap = engine.visibleSnapshot();
+    if (!snap || snap.left.length === 0) return;
     const meta: RecordingMeta = {
       sampleRate: engine.sampleRate(),
+      channels: engine.channels(),
       capturedAt: new Date().toISOString(),
-      durationSeconds: samples.length / engine.sampleRate(),
+      durationSeconds: snap.left.length / engine.sampleRate(),
     };
     try {
-      await saveRecording(samples, meta);
+      await saveRecording(snap, meta);
     } catch {
       /* OPFS unavailable — fine; the mirror still runs in-memory */
     }
   }
 
   async function runTranscribe(): Promise<void> {
-    const samples = engine.snapshot();
-    if (!samples || samples.length === 0) return;
+    const snap = engine.visibleSnapshot();
+    if (!snap || snap.left.length === 0) return;
     refs.transcribeButton.disabled = true;
     refs.transcript.textContent = 'loading Whisper… first run downloads weights, then caches them';
     const { createWhisperClient } = await import('./workers/whisper-client.js');
@@ -180,7 +267,9 @@ export function bootstrap(): App {
       refs.transcript.textContent = `Whisper · ${p.stage} · ${file} · ${pct.toString()}%`;
     });
     try {
-      const text = await client.transcribe(samples, engine.sampleRate(), refs.whisperModel.value);
+      // Downmix to mono for Whisper.
+      const mono = downmix(snap);
+      const text = await client.transcribe(mono, engine.sampleRate(), refs.whisperModel.value);
       refs.transcript.textContent = text || '(silence)';
     } catch (e) {
       refs.transcript.textContent = `transcription failed: ${e instanceof Error ? e.message : String(e)}`;
@@ -190,8 +279,8 @@ export function bootstrap(): App {
   }
 
   async function runAnalyse(): Promise<void> {
-    const samples = engine.snapshot();
-    if (!samples || samples.length === 0) return;
+    const snap = engine.visibleSnapshot();
+    if (!snap || snap.left.length === 0) return;
     refs.analyseButton.disabled = true;
     refs.analysis.innerHTML = '<div class="row"><span>loading Pyodide + librosa…</span></div>';
     const { createPyodideClient } = await import('./workers/pyodide-client.js');
@@ -200,7 +289,8 @@ export function bootstrap(): App {
       refs.analysis.innerHTML = `<div class="row"><span class="label">${stage}</span><span class="value">${detail}</span></div>`;
     });
     try {
-      const a = await client.analyse(samples, engine.sampleRate());
+      const mono = downmix(snap);
+      const a = await client.analyse(mono, engine.sampleRate());
       refs.analysis.innerHTML = renderAnalysis(a);
     } catch (e) {
       refs.analysis.innerHTML = `<div class="row"><span class="label">error</span><span class="value">${
@@ -211,19 +301,36 @@ export function bootstrap(): App {
     }
   }
 
-  // Reset OPFS state if the user revokes consent.
-  refs.consent.addEventListener('change', () => {
-    if (!refs.consent.checked) {
-      void clearRecording();
-    }
-  });
-
   return {
     start(): void {
-      // Initial render of slider values.
       bindSliderDisplays(refs, settings);
     },
   };
+}
+
+function reflectModeAndChannels(refs: ViewRefs, s: MirrorSettings): void {
+  refs.captureModeRolling.checked = s.captureMode === 'rolling';
+  refs.captureModeLocked.checked = s.captureMode === 'locked';
+  refs.channelsMono.checked = s.channels === 1;
+  refs.channelsStereo.checked = s.channels === 2;
+}
+
+function tailOf(snap: StereoSnapshot, tail: number): StereoSnapshot {
+  const len = snap.left.length;
+  if (len <= tail) return snap;
+  return {
+    left: snap.left.subarray(len - tail),
+    right: snap.right.subarray(len - tail),
+  };
+}
+
+function downmix(snap: StereoSnapshot): Float32Array {
+  const n = snap.left.length;
+  const out = new Float32Array(n);
+  for (let i = 0; i < n; i++) {
+    out[i] = ((snap.left[i] ?? 0) + (snap.right[i] ?? 0)) * 0.5;
+  }
+  return out;
 }
 
 function bindSlidersToSettings(
@@ -231,19 +338,9 @@ function bindSlidersToSettings(
   initial: MirrorSettings,
   onChange: (next: MirrorSettings) => void
 ): void {
-  const pairs: { input: HTMLInputElement; key: keyof MirrorSettings }[] = [
-    { input: refs.liveGain, key: 'liveGain' },
-    { input: refs.slowRate, key: 'slowRate' },
-    { input: refs.slowGain, key: 'slowGain' },
-    { input: refs.pitchSemitones, key: 'pitchSemitones' },
-    { input: refs.pitchGain, key: 'pitchGain' },
-    { input: refs.reverbDecay, key: 'reverbDecay' },
-    { input: refs.reverbWet, key: 'reverbWet' },
-    { input: refs.reverbGain, key: 'reverbGain' },
-  ];
-
   let current: MirrorSettings = { ...initial };
-  for (const { input, key } of pairs) {
+  for (const key of SLIDER_KEYS) {
+    const input = refs[key];
     input.value = String(initial[key]);
     const output = refs.root.querySelector<HTMLOutputElement>(`output[data-for="${key}"]`);
     if (output) output.value = formatSliderValue(key, initial[key]);
@@ -258,20 +355,23 @@ function bindSlidersToSettings(
 }
 
 function bindSliderDisplays(refs: ViewRefs, initial: MirrorSettings): void {
-  for (const key of Object.keys(initial) as (keyof MirrorSettings)[]) {
+  for (const key of SLIDER_KEYS) {
     const output = refs.root.querySelector<HTMLOutputElement>(`output[data-for="${key}"]`);
     if (output) output.value = formatSliderValue(key, initial[key]);
   }
 }
 
-function formatSliderValue(key: keyof MirrorSettings, value: number): string {
+function formatSliderValue(key: SliderKey, value: number): string {
   switch (key) {
     case 'slowRate':
       return `${(value * 100).toFixed(1)}%`;
     case 'pitchSemitones':
+    case 'freezeSemitones':
       return `${value >= 0 ? '+' : ''}${value.toFixed(0)} st`;
     case 'reverbDecay':
       return `${value.toFixed(1)} s`;
+    case 'freezeGrainSize':
+      return `${value.toFixed(2)} s`;
     default:
       return value.toFixed(2);
   }

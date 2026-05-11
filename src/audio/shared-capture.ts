@@ -1,8 +1,15 @@
 // Main-thread shim around the shared ring buffer that the capture-processor
 // AudioWorklet writes into. Owns the SharedArrayBuffers and exposes a
 // snapshot() that returns the "last N seconds" in time order.
+//
+// Layout is channel-major: channel 0 occupies the first `capacity` floats,
+// channel 1 the next `capacity`. `state[2]` carries a uint16 peak level for
+// the meter, written each callback by the worklet.
 
-import { Float32RingBuffer } from './ring-buffer.js';
+export interface StereoSnapshot {
+  left: Float32Array;
+  right: Float32Array;
+}
 
 export interface SharedCapture {
   /** Pass into the AudioWorkletNode's processorOptions. */
@@ -10,10 +17,14 @@ export interface SharedCapture {
     sharedAudio: SharedArrayBuffer;
     sharedState: SharedArrayBuffer;
     capacity: number;
+    channels: number;
   };
-  /** Returns a fresh copy of the captured audio, oldest sample first. */
-  snapshot(): Float32Array;
-  /** Number of valid samples currently in the ring. */
+  readonly channels: number;
+  /** Returns a fresh stereo copy, oldest sample first. */
+  snapshot(): StereoSnapshot;
+  /** Most recent peak (0..1), set by the worklet every render quantum. */
+  peak(): number;
+  /** Number of valid samples currently in the ring per channel. */
   length(): number;
   /** True once the ring has wrapped — buffer holds a full window. */
   isFull(): boolean;
@@ -23,9 +34,12 @@ export interface SharedCapture {
   reset(): void;
 }
 
-export function createSharedCapture(capacity: number): SharedCapture {
+export function createSharedCapture(capacity: number, channels: number): SharedCapture {
   if (!Number.isInteger(capacity) || capacity <= 0) {
     throw new RangeError(`capacity must be a positive integer, got ${capacity}`);
+  }
+  if (channels !== 1 && channels !== 2) {
+    throw new RangeError(`channels must be 1 or 2, got ${channels}`);
   }
   if (typeof SharedArrayBuffer === 'undefined') {
     throw new Error(
@@ -33,25 +47,36 @@ export function createSharedCapture(capacity: number): SharedCapture {
         'On GitHub Pages the coi-serviceworker shim must have registered first.'
     );
   }
-  const sharedAudio = new SharedArrayBuffer(capacity * Float32Array.BYTES_PER_ELEMENT);
-  const sharedState = new SharedArrayBuffer(2 * Int32Array.BYTES_PER_ELEMENT);
+  const sharedAudio = new SharedArrayBuffer(channels * capacity * Float32Array.BYTES_PER_ELEMENT);
+  const sharedState = new SharedArrayBuffer(3 * Int32Array.BYTES_PER_ELEMENT);
   const audio = new Float32Array(sharedAudio);
   const state = new Int32Array(sharedState);
 
+  function copyChannel(offset: number, writeIndex: number, filled: boolean): Float32Array {
+    if (!filled) {
+      const out = new Float32Array(writeIndex);
+      out.set(audio.subarray(offset, offset + writeIndex));
+      return out;
+    }
+    const out = new Float32Array(capacity);
+    const tail = audio.subarray(offset + writeIndex, offset + capacity);
+    out.set(tail, 0);
+    out.set(audio.subarray(offset, offset + writeIndex), tail.length);
+    return out;
+  }
+
   return {
-    options: { sharedAudio, sharedState, capacity },
-    snapshot(): Float32Array {
+    options: { sharedAudio, sharedState, capacity, channels },
+    channels,
+    snapshot(): StereoSnapshot {
       const writeIndex = Atomics.load(state, 0);
       const filled = Atomics.load(state, 1) === 1;
-      // Reuse Float32RingBuffer's snapshot logic via a one-shot copy.
-      const ring = new Float32RingBuffer(capacity);
-      if (filled) {
-        ring.write(audio.subarray(writeIndex));
-        ring.write(audio.subarray(0, writeIndex));
-      } else {
-        ring.write(audio.subarray(0, writeIndex));
-      }
-      return ring.snapshot();
+      const left = copyChannel(0, writeIndex, filled);
+      const right = channels === 2 ? copyChannel(capacity, writeIndex, filled) : left;
+      return { left, right };
+    },
+    peak(): number {
+      return Atomics.load(state, 2) / 65535;
     },
     length(): number {
       const filled = Atomics.load(state, 1) === 1;
@@ -61,13 +86,13 @@ export function createSharedCapture(capacity: number): SharedCapture {
       return Atomics.load(state, 1) === 1;
     },
     elapsedSeconds(sampleRate: number): number {
-      const samples = this.length();
-      return samples / sampleRate;
+      return this.length() / sampleRate;
     },
     reset(): void {
       audio.fill(0);
       Atomics.store(state, 0, 0);
       Atomics.store(state, 1, 0);
+      Atomics.store(state, 2, 0);
     },
   };
 }

@@ -12,6 +12,7 @@ const WORKLET_URL = new URL(
 export interface Recorder {
   readonly micInput: AudioNode;
   readonly sampleRate: number;
+  readonly channels: number;
   stop(): void;
 }
 
@@ -30,6 +31,7 @@ export async function startRecorder(
       echoCancellation: false,
       noiseSuppression: false,
       autoGainControl: false,
+      channelCount: capture.channels,
     },
     video: false,
   });
@@ -38,6 +40,9 @@ export async function startRecorder(
   const captureNode = new AudioWorkletNode(audioContext, 'capture-processor', {
     numberOfInputs: 1,
     numberOfOutputs: 0,
+    channelCount: capture.channels,
+    channelCountMode: 'explicit',
+    channelInterpretation: 'speakers',
     processorOptions: capture.options,
   });
   source.connect(captureNode);
@@ -45,6 +50,7 @@ export async function startRecorder(
   return {
     micInput: source,
     sampleRate: audioContext.sampleRate,
+    channels: capture.channels,
     stop(): void {
       for (const track of stream.getTracks()) track.stop();
       try {

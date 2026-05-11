@@ -21,6 +21,11 @@ check(
   'docs/coi-serviceworker.js exists (vite copied public/)',
   existsSync(`${docs}/coi-serviceworker.js`)
 );
+check('docs/manifest.webmanifest exists (PWA)', existsSync(`${docs}/manifest.webmanifest`));
+check(
+  'docs/worklets/capture-processor.js exists',
+  existsSync(`${docs}/worklets/capture-processor.js`)
+);
 
 if (existsSync(`${docs}/index.html`)) {
   const html = readFileSync(`${docs}/index.html`, 'utf8');
