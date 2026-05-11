@@ -1,0 +1,20 @@
+{
+  "name": "Field Recording Mirror",
+  "short_name": "Mirror",
+  "description": "A private browser instrument that records 30 seconds of now and replays it as a subtly altered sonic mirror.",
+  "start_url": "./",
+  "scope": "./",
+  "display": "standalone",
+  "background_color": "#0b0e1a",
+  "theme_color": "#0b0e1a",
+  "orientation": "any",
+  "categories": ["music", "art", "utilities"],
+  "icons": [
+    {
+      "src": "./icon.svg",
+      "sizes": "any",
+      "type": "image/svg+xml",
+      "purpose": "any maskable"
+    }
+  ]
+}
