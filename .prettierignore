@@ -1,0 +1,12 @@
+node_modules
+docs/assets
+docs/index.html
+docs/404.html
+docs/version.json
+docs/coi-serviceworker.js
+docs/icon.svg
+docs/worklets
+coverage
+package-lock.json
+public/coi-serviceworker.js
+public/worklets

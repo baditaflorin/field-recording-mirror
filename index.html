@@ -1,0 +1,32 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta
+      name="viewport"
+      content="width=device-width, initial-scale=1.0, viewport-fit=cover, user-scalable=no"
+    />
+    <meta name="theme-color" content="#0b0e1a" />
+    <meta name="color-scheme" content="dark" />
+    <meta
+      name="description"
+      content="Field Recording Mirror — a private browser instrument that records 30 seconds of now and replays it as a subtly altered sonic mirror. Audio never leaves your device."
+    />
+    <link rel="icon" type="image/svg+xml" href="./icon.svg" />
+    <title>Field Recording Mirror</title>
+    <!-- COOP/COEP shim must register before any module loads, so the page reloads
+         into cross-origin-isolated mode and SharedArrayBuffer is available for
+         Pyodide / whisper.cpp threading. -->
+    <script src="./coi-serviceworker.js"></script>
+  </head>
+  <body>
+    <noscript>
+      <p style="padding: 1rem; font-family: sans-serif; color: #f5f7ff; background: #0b0e1a">
+        This instrument needs JavaScript. The whole point is that it runs in your browser, on your
+        device, with no server. Please enable JS and reload.
+      </p>
+    </noscript>
+    <div id="app"></div>
+    <script type="module" src="/src/main.ts"></script>
+  </body>
+</html>

@@ -1,0 +1,17 @@
+node_modules
+coverage
+.DS_Store
+*.log
+.env
+.env.local
+.vite
+.husky/_
+.claude/
+dist-types
+.cache
+
+# Build artifacts inside docs/ are preserved by scripts/prepare-pages-dir.mjs.
+# Hand-authored docs (docs/adr/, docs/architecture.md, docs/postmortem.md,
+# docs/privacy.md, docs/data.md) are NOT ignored — Pages serves them too.
+# The Vite build emits docs/index.html, docs/404.html, docs/assets/*,
+# docs/version.json — those are committed as part of `chore: publish pages build`.

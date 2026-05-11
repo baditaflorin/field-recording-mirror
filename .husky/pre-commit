@@ -1,0 +1,8 @@
+#!/usr/bin/env sh
+# Gate every commit on lint/typecheck/tests so broken code can't be committed.
+# Run `npm run fmt` first to fix style; `npm run smoke` runs the full chain.
+set -e
+cd "$(git rev-parse --show-toplevel)"
+npm run lint
+npm run typecheck
+npm run test
