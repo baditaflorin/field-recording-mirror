@@ -20,7 +20,27 @@ function gitOrFallback(cmd, fallback) {
   }
 }
 
-const commit = gitOrFallback('git rev-parse --short HEAD', 'local');
+// Skip publish commits when reading commit metadata, so a `chore: publish
+// pages build` commit doesn't make every subsequent rebuild churn version.json
+// and re-trigger the publish loop. Mirrors vite.config.ts.
+function latestSourceCommit() {
+  try {
+    const log = execSync('git log -n 30 --format=%h%x00%s', {
+      encoding: 'utf8',
+      cwd: root,
+      stdio: ['ignore', 'pipe', 'ignore'],
+    }).trim();
+    if (!log) return null;
+    const sourceLine = log.split('\n').find((line) => !line.endsWith('chore: publish pages build'));
+    if (!sourceLine) return null;
+    return sourceLine.split('\0')[0] ?? null;
+  } catch {
+    return null;
+  }
+}
+
+const sourceCommit = latestSourceCommit();
+const commit = sourceCommit ?? gitOrFallback('git rev-parse --short HEAD', 'local');
 const builtAt =
   commit === 'local'
     ? new Date().toISOString()
