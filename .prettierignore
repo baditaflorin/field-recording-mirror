@@ -10,3 +10,10 @@ coverage
 package-lock.json
 public/coi-serviceworker.js
 public/worklets
+# Fleet-propagated docs (services-registry/CLAUDE.md via `fleet-runner inject`,
+# services-registry/SERVICE-TEMPLATE.md) are synced verbatim from the
+# registry; the registry copy always wins, so local reformatting here would
+# just get clobbered (and diverge) on the next inject. Keep them out of scope
+# for this repo's own lint gate.
+CLAUDE.md
+SERVICE-TEMPLATE.md

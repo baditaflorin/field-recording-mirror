@@ -11,6 +11,8 @@ import { mountView, type ViewRefs } from './ui/view.js';
 import { formatDuration, relativeAgo } from './primitives/time.js';
 import type { PyodideAnalysis } from './workers/pyodide-types.js';
 import type { WhisperProgress } from './workers/whisper-types.js';
+import type { WhisperClient } from './workers/whisper-client.js';
+import type { PyodideClient } from './workers/pyodide-client.js';
 
 declare const __APP_VERSION__: string;
 declare const __GIT_COMMIT__: string;
@@ -115,6 +117,38 @@ export function bootstrap(): App {
 
   let visualizer: Visualizer | null = null;
   let renderHandle = 0;
+  // Whisper/Pyodide workers are heavyweight (up to ~769 MB of model weights
+  // resident once loaded) and lazy-loaded on first use. They must be created
+  // at most once and reused across repeated Transcribe/Analyse clicks —
+  // creating a fresh client (and therefore a fresh, never-terminated Worker)
+  // on every click leaks one worker + its loaded model per click.
+  let whisperClient: WhisperClient | null = null;
+  let pyodideClient: PyodideClient | null = null;
+
+  async function getWhisperClient(): Promise<WhisperClient> {
+    if (whisperClient) return whisperClient;
+    const { createWhisperClient } = await import('./workers/whisper-client.js');
+    const client = createWhisperClient();
+    client.on('progress', (p: WhisperProgress) => {
+      const pct = Math.round(p.progress * 100);
+      const file = p.file || 'model';
+      refs.transcript.textContent = `Whisper · ${p.stage} · ${file} · ${pct.toString()}%`;
+    });
+    whisperClient = client;
+    return client;
+  }
+
+  async function getPyodideClient(): Promise<PyodideClient> {
+    if (pyodideClient) return pyodideClient;
+    const { createPyodideClient } = await import('./workers/pyodide-client.js');
+    const client = createPyodideClient();
+    client.on('progress', ({ stage, detail }) => {
+      refs.analysis.innerHTML = `<div class="row"><span class="label">${stage}</span><span class="value">${detail}</span></div>`;
+    });
+    pyodideClient = client;
+    return client;
+  }
+
   const handleResize = (): void => {
     visualizer?.resize();
   };
@@ -259,14 +293,8 @@ export function bootstrap(): App {
     if (!snap || snap.left.length === 0) return;
     refs.transcribeButton.disabled = true;
     refs.transcript.textContent = 'loading Whisper… first run downloads weights, then caches them';
-    const { createWhisperClient } = await import('./workers/whisper-client.js');
-    const client = createWhisperClient();
-    client.on('progress', (p: WhisperProgress) => {
-      const pct = Math.round(p.progress * 100);
-      const file = p.file || 'model';
-      refs.transcript.textContent = `Whisper · ${p.stage} · ${file} · ${pct.toString()}%`;
-    });
     try {
+      const client = await getWhisperClient();
       // Downmix to mono for Whisper.
       const mono = downmix(snap);
       const text = await client.transcribe(mono, engine.sampleRate(), refs.whisperModel.value);
@@ -283,12 +311,8 @@ export function bootstrap(): App {
     if (!snap || snap.left.length === 0) return;
     refs.analyseButton.disabled = true;
     refs.analysis.innerHTML = '<div class="row"><span>loading Pyodide + librosa…</span></div>';
-    const { createPyodideClient } = await import('./workers/pyodide-client.js');
-    const client = createPyodideClient();
-    client.on('progress', ({ stage, detail }) => {
-      refs.analysis.innerHTML = `<div class="row"><span class="label">${stage}</span><span class="value">${detail}</span></div>`;
-    });
     try {
+      const client = await getPyodideClient();
       const mono = downmix(snap);
       const a = await client.analyse(mono, engine.sampleRate());
       refs.analysis.innerHTML = renderAnalysis(a);

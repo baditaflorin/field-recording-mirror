@@ -99,6 +99,13 @@ export function createEngine(events: Partial<EngineEvents> = {}): Engine {
     },
     async stop(): Promise<void> {
       if (!running) return;
+      // Flip the guard synchronously, before any `await`, so a second
+      // `stop()` fired while this one is still tearing down (e.g. a rapid
+      // double-click on Stop) sees `running === false` immediately and
+      // returns instead of racing this call into a second
+      // `audioContext.close()` — which throws InvalidStateError on an
+      // already-closing context and would otherwise reject uncaught.
+      running = false;
       if (levelInterval !== null) {
         window.clearInterval(levelInterval);
         levelInterval = null;
@@ -118,7 +125,6 @@ export function createEngine(events: Partial<EngineEvents> = {}): Engine {
       audioContext = null;
       capture = null;
       lockedSnapshot = null;
-      running = false;
       events.onMirrorStateChange?.(false);
       events.onLockStateChange?.(false);
     },
