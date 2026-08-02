@@ -19,7 +19,7 @@
     "vitest": "^4.1.5"
   },
   "engines": {
-    "node": "\u003e=22"
+    "node": ">=22"
   },
   "homepage": "https://baditaflorin.github.io/field-recording-mirror/",
   "license": "MIT",
@@ -34,10 +34,10 @@
   },
   "scripts": {
     "dev": "vite",
-    "build": "node scripts/prepare-pages-dir.mjs \u0026\u0026 tsc -b \u0026\u0026 vite build \u0026\u0026 node scripts/write-version.mjs \u0026\u0026 node scripts/copy-404.mjs \u0026\u0026 node scripts/check-pages-build.mjs",
+    "build": "node scripts/prepare-pages-dir.mjs && tsc -b && vite build && node scripts/write-version.mjs && node scripts/copy-404.mjs && node scripts/check-pages-build.mjs",
     "preview": "vite preview",
-    "pages-preview": "npm run build \u0026\u0026 node scripts/serve-static.mjs docs",
-    "lint": "eslint . \u0026\u0026 prettier --check .",
+    "pages-preview": "npm run build && node scripts/serve-static.mjs docs",
+    "lint": "eslint . && prettier --check .",
     "fmt": "prettier --write .",
     "typecheck": "tsc -b --pretty",
     "test": "vitest run --coverage",
